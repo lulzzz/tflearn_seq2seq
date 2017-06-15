@@ -15,8 +15,8 @@ import tensorflow as tf
 
 from pattern import SequencePattern
 
-from tensorflow.python.ops import seq2seq
-from tensorflow.python.ops import rnn_cell
+from tensorflow.contrib.legacy_seq2seq.python.ops import seq2seq
+from tensorflow.contrib.rnn.python.ops import core_rnn_cell
 
 #-----------------------------------------------------------------------------
 
@@ -27,7 +27,7 @@ class TFLearnSeq2Seq(object):
     AVAILABLE_MODELS = ["embedding_rnn", "embedding_attention"]
     def __init__(self, sequence_pattern, seq2seq_model=None, verbose=None, name=None, data_dir=None):
         '''
-        sequence_pattern_class = a SequencePattern class instance, which defines pattern parameters 
+        sequence_pattern_class = a SequencePattern class instance, which defines pattern parameters
                                  (input, output lengths, name, generating function)
         seq2seq_model = string specifying which seq2seq model to use, e.g. "embedding_rnn"
         '''
@@ -70,8 +70,8 @@ class TFLearnSeq2Seq(object):
         then use seq2seq.sequence_loss to actually compute the loss function.
         '''
         if self.verbose > 2: print ("my_sequence_loss y_pred=%s, y_true=%s" % (y_pred, y_true))
-        logits = tf.unpack(y_pred, axis=1)		# list of [-1, num_decoder_synbols] elements
-        targets = tf.unpack(y_true, axis=1)		# y_true has shape [-1, self.out_seq_len]; unpack to list of self.out_seq_len [-1] elements
+        logits = tf.unstack(y_pred, axis=1)		# list of [-1, num_decoder_synbols] elements
+        targets = tf.unstack(y_true, axis=1)		# y_true has shape [-1, self.out_seq_len]; unstack to list of self.out_seq_len [-1] elements
         if self.verbose > 2:
             print ("my_sequence_loss logits=%s" % (logits,))
             print ("my_sequence_loss targets=%s" % (targets,))
@@ -90,14 +90,14 @@ class TFLearnSeq2Seq(object):
         if self.verbose > 2: print ("my_accuracy pred_idx = %s" % pred_idx)
         accuracy = tf.reduce_mean(tf.cast(tf.equal(pred_idx, y_true), tf.float32), name='acc')
         return accuracy
-    
+
     def model(self, mode="train", num_layers=1, cell_size=32, cell_type="BasicLSTMCell", embedding_size=20, learning_rate=0.0001,
               tensorboard_verbose=0, checkpoint_path=None):
         '''
         Build tensor specifying graph of operations for the seq2seq neural network model.
 
         mode = string, either "train" or "predict"
-        cell_type = attribute of rnn_cell specifying which RNN cell type to use
+        cell_type = attribute of core_rnn_cell specifying which RNN cell type to use
         cell_size = size for the hidden layer in the RNN cell
         num_layers = number of RNN cell layers to use
 
@@ -110,12 +110,12 @@ class TFLearnSeq2Seq(object):
 
         network = tflearn.input_data(shape=[None, self.in_seq_len + self.out_seq_len], dtype=tf.int32, name="XY")
         encoder_inputs = tf.slice(network, [0, 0], [-1, self.in_seq_len], name="enc_in")	# get encoder inputs
-        encoder_inputs = tf.unpack(encoder_inputs, axis=1)					# transform into list of self.in_seq_len elements, each [-1]
+        encoder_inputs = tf.unstack(encoder_inputs, axis=1)					# transform into list of self.in_seq_len elements, each [-1]
 
         decoder_inputs = tf.slice(network, [0, self.in_seq_len], [-1, self.out_seq_len], name="dec_in")	# get decoder inputs
-        decoder_inputs = tf.unpack(decoder_inputs, axis=1)					# transform into list of self.out_seq_len elements, each [-1]
+        decoder_inputs = tf.unstack(decoder_inputs, axis=1)					# transform into list of self.out_seq_len elements, each [-1]
 
-        go_input = tf.mul( tf.ones_like(decoder_inputs[0], dtype=tf.int32), GO_VALUE ) # insert "GO" symbol as the first decoder input; drop the last decoder input
+        go_input = tf.multiply( tf.ones_like(decoder_inputs[0], dtype=tf.int32), GO_VALUE ) # insert "GO" symbol as the first decoder input; drop the last decoder input
         decoder_inputs = [go_input] + decoder_inputs[: self.out_seq_len-1]				# insert GO as first; drop last decoder input
 
         feed_previous = not (mode=="train")
@@ -126,14 +126,14 @@ class TFLearnSeq2Seq(object):
             print ("decoder inputs: %s" % str(decoder_inputs))
             print ("len decoder inputs: %s" % len(decoder_inputs))
 
-        self.n_input_symbols = self.in_max_int + 1		# default is integers from 0 to 9 
+        self.n_input_symbols = self.in_max_int + 1		# default is integers from 0 to 9
         self.n_output_symbols = self.out_max_int + 2		# extra "GO" symbol for decoder inputs
 
-        single_cell = getattr(rnn_cell, cell_type)(cell_size, state_is_tuple=True)
+        single_cell = getattr(core_rnn_cell, cell_type)(cell_size, state_is_tuple=True)
         if num_layers==1:
             cell = single_cell
         else:
-            cell = rnn_cell.MultiRNNCell([single_cell] * num_layers)
+            cell = core_rnn_cell.multiplytiRNNCell([single_cell] * num_layers)
 
         if self.seq2seq_model=="embedding_rnn":
             model_outputs, states = seq2seq.embedding_rnn_seq2seq(encoder_inputs,	# encoder_inputs: A list of 2D Tensors [batch_size, input_size].
@@ -155,14 +155,14 @@ class TFLearnSeq2Seq(object):
                                                                         feed_previous=feed_previous)
         else:
             raise Exception('[TFLearnSeq2Seq] Unknown seq2seq model %s' % self.seq2seq_model)
-            
+
         tf.add_to_collection(tf.GraphKeys.LAYER_VARIABLES + '/' + "seq2seq_model", model_outputs)	# for TFLearn to know what to save and restore
 
         # model_outputs: list of the same length as decoder_inputs of 2D Tensors with shape [batch_size x output_size] containing the generated outputs.
         if self.verbose > 2: print ("model outputs: %s" % model_outputs)
-        network = tf.pack(model_outputs, axis=1)		# shape [-1, n_decoder_inputs (= self.out_seq_len), num_decoder_symbols]
+        network = tf.stack(model_outputs, axis=1)		# shape [-1, n_decoder_inputs (= self.out_seq_len), num_decoder_symbols]
         if self.verbose > 2: print ("packed model outputs: %s" % network)
-        
+
         if self.verbose > 3:
             all_vars = tf.get_collection(tf.GraphKeys.VARIABLES)
             print ("all_vars = %s" % all_vars)
@@ -170,44 +170,44 @@ class TFLearnSeq2Seq(object):
         with tf.name_scope("TargetsData"):			# placeholder for target variable (i.e. trainY input)
             targetY = tf.placeholder(shape=[None, self.out_seq_len], dtype=tf.int32, name="Y")
 
-        network = tflearn.regression(network, 
+        network = tflearn.regression(network,
                                      placeholder=targetY,
                                      optimizer='adam',
                                      learning_rate=learning_rate,
-                                     loss=self.sequence_loss, 
+                                     loss=self.sequence_loss,
                                      metric=self.accuracy,
                                      name="Y")
 
         model = tflearn.DNN(network, tensorboard_verbose=tensorboard_verbose, checkpoint_path=checkpoint_path)
         return model
 
-    def train(self, num_epochs=20, num_points=100000, model=None, model_params=None, weights_input_fn=None, 
+    def train(self, num_epochs=20, num_points=100000, model=None, model_params=None, weights_input_fn=None,
               validation_set=0.1, snapshot_step=5000, batch_size=128, weights_output_fn=None):
         '''
         Train model, with specified number of epochs, and dataset size.
 
-        Use specified model, or create one if not provided.  Load initial weights from file weights_input_fn, 
+        Use specified model, or create one if not provided.  Load initial weights from file weights_input_fn,
         if provided. validation_set specifies what to use for the validation.
 
         Returns logits for prediction, as an numpy array of shape [out_seq_len, n_output_symbols].
         '''
         trainXY, trainY = self.generate_trainig_data(num_points)
-        print ("[TFLearnSeq2Seq] Training on %d point dataset (pattern '%s'), with %d epochs" % (num_points, 
+        print ("[TFLearnSeq2Seq] Training on %d point dataset (pattern '%s'), with %d epochs" % (num_points,
                                                                                                self.sequence_pattern.PATTERN_NAME,
                                                                                                num_epochs))
         if self.verbose > 1:
             print ("  model parameters: %s" % json.dumps(model_params, indent=4))
         model_params = model_params or {}
         model = model or self.setup_model("train", model_params, weights_input_fn)
-        
-        model.fit(trainXY, trainY, 
-                  n_epoch=num_epochs, 
-                  validation_set=validation_set, 
+
+        model.fit(trainXY, trainY,
+                  n_epoch=num_epochs,
+                  validation_set=validation_set,
                   batch_size=batch_size,
                   shuffle=True,
                   show_metric=True,
                   snapshot_step=snapshot_step,
-                  snapshot_epoch=False, 
+                  snapshot_epoch=False,
                   run_id="TFLearnSeq2Seq"
              )
         print ("Done!")
@@ -297,7 +297,7 @@ class VAction(argparse.Action):
         curval = getattr(args, self.dest, 0) or 0
         values=values.count('v')+1
         setattr(args, self.dest, values + curval)
-    
+
 #-----------------------------------------------------------------------------
 
 def CommandLine(args=None, arglist=None):
@@ -312,7 +312,7 @@ predict - give input sequence as argument (or specify inputs via --from-file <fi
 
 """
     parser = argparse.ArgumentParser(description=help_text, formatter_class=argparse.RawTextHelpFormatter)
-    
+
     parser.add_argument("cmd", help="command")
     parser.add_argument("cmd_input", nargs='*', help="input to command")
     parser.add_argument('-v', "--verbose", nargs=0, help="increase output verbosity (add more -v to increase versbosity)", action=VAction, dest='verbose')
@@ -337,7 +337,7 @@ predict - give input sequence as argument (or specify inputs via --from-file <fi
 
     if not args:
         args = parser.parse_args(arglist)
-    
+
     if args.iter_num is not None:
         args.input_weights = args.iter_num
         args.output_weights = args.iter_num + 1
@@ -357,10 +357,10 @@ predict - give input sequence as argument (or specify inputs via --from-file <fi
             raise Exception("Please specify the number of datapoints to use for training, as the first argument")
         sp = SequencePattern(args.pattern_name, in_seq_len=args.in_len, out_seq_len=args.out_len)
         ts2s = TFLearnSeq2Seq(sp, seq2seq_model=args.model, data_dir=args.data_dir, name=args.name, verbose=args.verbose)
-        ts2s.train(num_epochs=args.epochs, num_points=num_points, weights_output_fn=args.output_weights, 
+        ts2s.train(num_epochs=args.epochs, num_points=num_points, weights_output_fn=args.output_weights,
                    weights_input_fn=args.input_weights, model_params=model_params)
         return ts2s
-        
+
     elif args.cmd=="predict":
         if args.from_file:
             inputs = json.loads(args.from_file)
@@ -392,7 +392,7 @@ def test_sp1():
     '''
     sp = SequencePattern("maxmin_dup")
     y = sp.generate_output_sequence(range(10))
-    assert all(y==np.array([9, 0, 2, 3, 4, 5, 6, 7, 8, 9]))    
+    assert all(y==np.array([9, 0, 2, 3, 4, 5, 6, 7, 8, 9]))
     sp = SequencePattern("sorted")
     y = sp.generate_output_sequence([5,6,1,2,9])
     assert all(y==np.array([1, 2, 5, 6, 9]))
@@ -526,7 +526,7 @@ def test_main3():
     ts2s = CommandLine(arglist=arglist)
     assert os.path.exists(wfn)
 
-    arglist = "-i tmp_weights.tfl -v -v -v -v -m embedding_attention predict 1 2 3 4 5 6 7 8 9 0" 
+    arglist = "-i tmp_weights.tfl -v -v -v -v -m embedding_attention predict 1 2 3 4 5 6 7 8 9 0"
     arglist = arglist.split(' ')
     tf.reset_default_graph()
     ts2s = CommandLine(arglist=arglist)
